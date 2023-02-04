@@ -23,4 +23,6 @@ mlir_str = str(
         print_generic_op_form=True, large_elements_limit=10
     )
 )
-print(mlir_str)
+
+with open("examples/alexnet.mlir", "w") as f:
+    f.write(mlir_str)
