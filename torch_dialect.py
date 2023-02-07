@@ -4,7 +4,7 @@ from xdsl.dialects.builtin import (
     AnyFloat,
     AnyIntegerAttr,
     ArrayAttr,
-    DenseIntOrFPElementsAttr,
+    DenseResourceAttr,
     FloatAttr,
     IntAttr,
     IntegerAttr,
@@ -37,7 +37,7 @@ from xdsl.irdl import (
     irdl_op_definition,
     irdl_to_attr_constraint,
 )
-from xdsl.parser import BaseParser
+from xdsl.parser import BaseParser, ParserCommons
 from xdsl.printer import Printer
 
 
@@ -60,6 +60,27 @@ class BoolAttr(Data[bool]):
     @builder
     def from_bool(data: bool):
         return BoolAttr(data)
+
+
+def prase_torch_type_without_prefix(parser: BaseParser) -> ParametrizedAttribute:
+    # Get name of type
+    type_name = parser.tokenizer.next_token_of_pattern(ParserCommons.bare_id)
+    if type_name is None:
+        parser.raise_error("Expected a type name")
+    type_def = parser.ctx.get_optional_attr(
+        "torch." + type_name.text
+        if not type_name.text.startswith("torch.")
+        else type_name.text
+    )
+    if type_def is None:
+        parser.raise_error(f"Unknown type {type_name.text}")
+
+    # Parse parameters
+    if issubclass(type_def, ParametrizedAttribute):
+        parameters = type_def.parse_parameters(parser)
+        return type_def(parameters)
+
+    parser.raise_error(f"Type {type_name.text} is not parametrized")
 
 
 @irdl_attr_definition
@@ -86,13 +107,27 @@ class NoneType(ParametrizedAttribute):
 class VTensorType(ParametrizedAttribute):
     name = "torch.vtensor"
     dimensions: ParameterDef[ArrayAttr[AnyIntegerAttr]]
-    type: ParameterDef[IntegerType | AnyFloat]
+    type: ParameterDef[AnyFloat]
 
 
 @irdl_attr_definition
 class ListType(ParametrizedAttribute):
     name = "torch.list"
-    type: ParameterDef[xdsl.dialects.builtin.IntegerType]
+    type: ParameterDef[IntegerType | FloatType | BoolType]
+
+    @staticmethod
+    def parse_parameters(parser: BaseParser) -> list[Attribute]:
+        parser.parse_char("<")
+        parsed_type = prase_torch_type_without_prefix(parser)
+        if parsed_type is None:
+            raise ValueError("Expected a type")
+        parser.parse_char(">")
+        return [parsed_type]
+
+    def print_paramters(self, printer: Printer) -> None:
+        printer.print_string("<")
+        printer.print_attribute(self.type)
+        printer.print_string(">")
 
 
 @irdl_op_definition
@@ -125,7 +160,7 @@ class ConstantNoneOp(Operation):
 @irdl_op_definition
 class VTensorLitteralOp(Operation):
     name = "torch.vtensor.literal"
-    value: OpAttr[DenseIntOrFPElementsAttr]
+    value: OpAttr[DenseResourceAttr]
     res: Annotated[OpResult, VTensorType]
 
 
@@ -243,7 +278,15 @@ Torch = Dialect(
         MMOp,
         AddTensorOp,
     ],
-    [IntegerType, FloatType, BoolType, NoneType, VTensorType, ListType, BoolAttr],
+    [
+        IntegerType,
+        FloatType,
+        BoolType,
+        NoneType,
+        VTensorType,
+        ListType,
+        BoolAttr,
+    ],
 )
 
 ### PARSING
